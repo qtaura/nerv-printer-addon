@@ -122,6 +122,15 @@ public class CarpetPrinter extends Module implements MapPrinter {
         .build()
     );
 
+    private final Setting<Integer> retryMaps = sgGeneral.add(new IntSetting.Builder()
+        .name("retry-maps")
+        .description("How many empty maps to take from the chest at once in case map generation fails.")
+        .defaultValue(3)
+        .min(1)
+        .sliderRange(1, 10)
+        .build()
+    );
+
     private final Setting<SprintMode> sprinting = sgGeneral.add(new EnumSetting.Builder<SprintMode>()
         .name("sprint-mode")
         .description("How to sprint.")
@@ -704,6 +713,9 @@ public class CarpetPrinter extends Module implements MapPrinter {
                 interactTimeout = 0;
                 timeoutTicks = postRestockDelay.get();
                 Utils.getOneItem(mapSlot, false, availableSlots, availableHotBarSlots, packet);
+                for (int i = 1; i < retryMaps.get(); i++) {
+                    Utils.getOneItem(mapSlot, true, availableSlots, availableHotBarSlots, packet);
+                }
                 Utils.getOneItem(paneSlot, true, availableSlots, availableHotBarSlots, packet);
                 mc.player.getInventory().setSelectedSlot(availableHotBarSlots.get(0));
 
@@ -943,14 +955,43 @@ public class CarpetPrinter extends Module implements MapPrinter {
                     return;
                 case "fillMap":
                     mc.getNetworkHandler().sendPacket(new PlayerInteractItemC2SPacket(Hand.MAIN_HAND, Utils.getNextInteractID(), mc.player.getYaw(), mc.player.getPitch()));
-                    if (mapFillSquareSize.get() == 0) {
-                        checkpoints.add(0, new Pair(cartographyTable.getRight(), new Pair<>("cartographyTable", null)));
+                    checkpoints.add(0, new Pair(goal, new Pair("verifyMap", null)));
+                    return;
+                case "verifyMap":
+                    boolean hasFilledMap = false;
+                    for (int slot = 0; slot < 36; slot++) {
+                        if (mc.player.getInventory().getStack(slot).getItem() == Items.FILLED_MAP) {
+                            hasFilledMap = true;
+                            break;
+                        }
+                    }
+                    if (hasFilledMap) {
+                        if (mapFillSquareSize.get() == 0) {
+                            checkpoints.add(0, new Pair(cartographyTable.getRight(), new Pair<>("cartographyTable", null)));
+                        } else {
+                            checkpoints.add(new Pair(goal.add(-mapFillSquareSize.get(), 0, mapFillSquareSize.get()), new Pair("sprint", null)));
+                            checkpoints.add(new Pair(goal.add(mapFillSquareSize.get(), 0, mapFillSquareSize.get()), new Pair("sprint", null)));
+                            checkpoints.add(new Pair(goal.add(mapFillSquareSize.get(), 0, -mapFillSquareSize.get()), new Pair("sprint", null)));
+                            checkpoints.add(new Pair(goal.add(-mapFillSquareSize.get(), 0, -mapFillSquareSize.get()), new Pair("sprint", null)));
+                            checkpoints.add(new Pair(cartographyTable.getRight(), new Pair("cartographyTable", null)));
+                        }
                     } else {
-                        checkpoints.add(new Pair(goal.add(-mapFillSquareSize.get(), 0, mapFillSquareSize.get()), new Pair("sprint", null)));
-                        checkpoints.add(new Pair(goal.add(mapFillSquareSize.get(), 0, mapFillSquareSize.get()), new Pair("sprint", null)));
-                        checkpoints.add(new Pair(goal.add(mapFillSquareSize.get(), 0, -mapFillSquareSize.get()), new Pair("sprint", null)));
-                        checkpoints.add(new Pair(goal.add(-mapFillSquareSize.get(), 0, -mapFillSquareSize.get()), new Pair("sprint", null)));
-                        checkpoints.add(new Pair(cartographyTable.getRight(), new Pair("cartographyTable", null)));
+                        boolean hasEmptyMap = false;
+                        for (int slot = 0; slot < 36; slot++) {
+                            if (mc.player.getInventory().getStack(slot).getItem() == Items.MAP) {
+                                Utils.performSwap(slot, availableHotBarSlots.get(0));
+                                hasEmptyMap = true;
+                                break;
+                            }
+                        }
+                        if (hasEmptyMap) {
+                            info("Map not generated, trying again...");
+                            checkpoints.add(0, new Pair(goal, new Pair("fillMap", null)));
+                        } else {
+                            info("Map not generated, getting another map...");
+                            Pair<BlockPos, Vec3d> bestChest = getBestChest(Items.CARTOGRAPHY_TABLE);
+                            if (bestChest != null) checkpoints.add(0, new Pair(bestChest.getRight(), new Pair("mapMaterialChest", bestChest.getLeft())));
+                        }
                     }
                     return;
                 case "cartographyTable":
